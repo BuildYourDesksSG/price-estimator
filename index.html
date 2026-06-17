@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Build Your Desks — Price Estimator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#FFFFFF;font-family:'Poppins',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#1C1C1C}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-thumb{background:#D9CDBE;border-radius:3px}
+  select,input{outline:none;font-family:inherit}
+  button{font-family:inherit}
+  input[type=range]{accent-color:#6B4530; width:100%; height:6px; cursor:pointer}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState,useMemo,useEffect} = React;
+
+/* ════════════════════════════════════════════════════════════════════
+   BRAND TOKENS
+   Colours inferred from buildyourdesks.com content/tone (walnut-brown +
+   warm white, "handcrafted" premium feel). Exact hex/font could not be
+   extracted automatically — adjust the two blocks below if needed.
+   ════════════════════════════════════════════════════════════════════ */
+const T = {
+  bg:        "#FFFFFF",
+  bgAlt:     "#FAF7F2",
+  text:      "#1C1C1C",
+  textMute:  "#6B6258",
+  border:    "#E5DED2",
+  brand:     "#6B4530",   // primary walnut brown — headers, totals, active states
+  brandSoft: "#8B5E3C",   // lighter accent — hover, secondary highlights
+  brandTint: "#F3EAE0",   // very light brown wash — selected card backgrounds
+  good:      "#2E7D4F",
+  warn:      "#B23A2E",
+  font:      "'Poppins',system-ui,-apple-system,sans-serif",
+};
+
+/* ════════════════════════════════════════════════════════════════════
+   PRODUCT DATA — confirmed business rules
+   ════════════════════════════════════════════════════════════════════ */
+
+const TOP_RATE = 220; // $/m² for table top — MFC and MDF only
+
+/* Rectangle desk frames (T-03 single motor, T-07 dual motor) */
+const RECT_FRAMES = {
+  single: { name:"T-03 Single", price:279, maxLen:150 },
+  dual:   { name:"T-07 Dual",   price:379, maxLen:180 },
+};
+const RECT_MIN_LEN = 80;   // below 100 -> flat quiet-tier price
+const FLAT_TIER_MAX = 99;  // 80-99cm inclusive -> flat price
+const FLAT_TIER_PRICE = 349;
+const RECT_DEPTH_MIN = 60; // cm — carried over from prior frame specs, not reconfirmed for this revamp
+const RECT_DEPTH_MAX = 80; // cm — same caveat as above
+
+/* ────────────────────────────────────────────────────────────────────
+   L-SHAPE (3-LEG) — SIZE RULES BY MATERIAL
+   Source: confirmed table (MFC / MDF / Solid Wood), with one inference:
+   the table's "120cm" minimum is read as an L1-only minimum. L2's own
+   minimum (50cm) is carried over from the width-minimum value, since a
+   120cm L2 floor combined with MDF's 90cm L2 ceiling is mathematically
+   impossible (min > max). If L2's true minimum is something else, only
+   the LSHAPE_L2_MIN constant below needs to change.
+   ──────────────────────────────────────────────────────────────────── */
+const LSHAPE_FRAME_PRICE = 609;     // single frame price, same across all 3 materials
+const LSHAPE_L1_MIN = 120;          // cm — confirmed, all materials
+const LSHAPE_L2_MIN = 50;           // cm — inferred (see note above)
+const LSHAPE_WIDTH_MIN = 50;        // cm — confirmed, applies to L1 and L2 width, all materials
+const LSHAPE_WIDTH_MAX = 80;        // cm — confirmed, applies to L1 and L2 width, all materials
+
+const LSHAPE_MATERIALS = {
+  mfc: {
+    label: "MFC", tag: "Standard",
+    l1max: 150, l2max: 150,
+    rateType: "flat", rate: TOP_RATE,
+    cableNote: "Rectangular or square grommet holes only — no concave slot.",
+  },
+  mdf: {
+    label: "MDF", tag: "Special Order",
+    l1max: 150, l2max: 90,
+    rateType: "flat", rate: TOP_RATE,
+    cableNote: "Concave slot available, or rectangular/square grommet holes.",
+  },
+  solid: {
+    label: "Solid Wood", tag: "Side-Joint Construction",
+    l1max: 180, l2max: 180,
+    rateType: "species",
+    cableNote: "Any cable routing style — concave, grommet, T-slot, or round hole.",
+  },
+};
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — SOLID WOOD SPECIES & RATES 🔴🔴🔴
+   These rates are confirmed (carried over from the per-species rate
+   table). Swatches are approximate representative tones only — actual
+   grain and shade vary piece to piece and cannot be guaranteed to match.
+   ──────────────────────────────────────────────────────────────────── */
+const SOLID_WOOD_SPECIES = [
+  { id:"redoak",       name:"American Red Oak",     rate:310, hex:"#C8975A" },
+  { id:"smokedredoak", name:"Smoked Red Oak",        rate:375, hex:"#5A4030" },
+  { id:"cherry",       name:"American Cherry Wood",  rate:400, hex:"#8B4A35" },
+  { id:"ash",          name:"American Ash Wood",     rate:430, hex:"#C9B896" },
+  { id:"maple",        name:"Canadian Hard Maple",   rate:450, hex:"#E8D9B5" },
+  { id:"whiteoak",     name:"American White Oak",    rate:470, hex:"#D9C7A3" },
+  { id:"walnut",       name:"American Black Walnut", rate:650, hex:"#3D2B1F" },
+];
+/* 🔴 END SOLID WOOD SPECIES 🔴 */
+
+/* Assembly */
+const ASSEMBLY_STANDARD = 60;
+const ASSEMBLY_TWO_PERSON = 120;
+const ASSEMBLY_THRESHOLD_CM = 151; // >= this length on L1 -> 2-installer fee (MFC/MDF only)
+// Solid wood always requires 2-installer assembly regardless of size — applied in code below.
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — FINAL MDF COLOUR LIST (10 colours) 🔴🔴🔴
+   Placeholder names/swatches below. Replace with confirmed final list.
+   ──────────────────────────────────────────────────────────────────── */
+const MDF_COLOURS = [
+  { id:"mdf-1",  name:"Warm Oak",        hex:"#C9A36A" },
+  { id:"mdf-2",  name:"Dark Walnut",     hex:"#5C4332" },
+  { id:"mdf-3",  name:"Light Walnut",    hex:"#8B6B4A" },
+  { id:"mdf-4",  name:"White Oak",       hex:"#E3D5BD" },
+  { id:"mdf-5",  name:"Pearl White",     hex:"#F4F1EA" },
+  { id:"mdf-6",  name:"Charcoal Black",  hex:"#2A2622" },
+  { id:"mdf-7",  name:"Pear Hue",        hex:"#D9C49A" },
+  { id:"mdf-8",  name:"Ash Grey",        hex:"#A8A099" },
+  { id:"mdf-9",  name:"Cherry Brown",    hex:"#7A4632" },
+  { id:"mdf-10", name:"Sand Beige",      hex:"#D8C8AE" },
+];
+/* 🔴 END MDF COLOUR LIST 🔴 */
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — FINAL MFC COLOUR LIST (10 colours) 🔴🔴🔴
+   Placeholder names/swatches below. Replace with confirmed final list.
+   ──────────────────────────────────────────────────────────────────── */
+const MFC_COLOURS = [
+  { id:"mfc-1",  name:"Natural Oak",     hex:"#C7A874" },
+  { id:"mfc-2",  name:"Walnut",          hex:"#6B4A35" },
+  { id:"mfc-3",  name:"Espresso",        hex:"#3A2A20" },
+  { id:"mfc-4",  name:"Soft White",      hex:"#F0ECE3" },
+  { id:"mfc-5",  name:"Graphite",        hex:"#3D3935" },
+  { id:"mfc-6",  name:"Greige",          hex:"#B8AD9E" },
+  { id:"mfc-7",  name:"Honey Maple",     hex:"#D6B583" },
+  { id:"mfc-8",  name:"Slate Grey",      hex:"#7C7670" },
+  { id:"mfc-9",  name:"Rosewood",        hex:"#6E3B30" },
+  { id:"mfc-10", name:"Ivory",           hex:"#E8E1D3" },
+];
+/* 🔴 END MFC COLOUR LIST 🔴 */
+
+const MDF_EDGES = [
+  { id:"edge02", name:"Edge 02 — Front Slope", desc:"A clean diagonal slope along the front edge." },
+  { id:"curve",  name:"Ergo Curve",            desc:"A gentle concave scoop at the front centre, where you sit closest to the desk." },
+];
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — UNIDESK FINAL PRICE 🔴🔴🔴
+   Dimension corrected per manufacturer update (120 x 80cm, not 120 x 70cm).
+   Price not yet reconfirmed under the new pricing structure — set to
+   null so the page shows "Contact us" instead of guessing a number.
+   ──────────────────────────────────────────────────────────────────── */
+const UNIDESK_PRICE = null; // e.g. 699
+const UNIDESK_SIZE = "120cm × 80cm";
+const UNIDESK_LEG_COLOURS = ["Black", "Grey"];
+/* 🔴 END UNIDESK PRICE 🔴 */
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — SLANTED DESK NAME & SPECS 🔴🔴🔴
+   ──────────────────────────────────────────────────────────────────── */
+const SLANTED_DESK_NAME = "Slanted Desk"; // placeholder name
+/* 🔴 END SLANTED DESK 🔴 */
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — GAMING DESK NAME & SPECS 🔴🔴🔴
+   ──────────────────────────────────────────────────────────────────── */
+const GAMING_DESK_NAME = "Gaming Desk"; // placeholder name
+/* 🔴 END GAMING DESK 🔴 */
+
+/* ────────────────────────────────────────────────────────────────────
+   🔴🔴🔴 CHANGE BELOW HERE — CONTACT LINK 🔴🔴🔴
+   ──────────────────────────────────────────────────────────────────── */
+const CONTACT_URL = "https://buildyourdesks.com/contact-us/";
+/* 🔴 END CONTACT LINK 🔴 */
+
+const fmt = v => `$${Number(v).toFixed(2)}`;
+const clamp = (v,min,max) => Math.min(max, Math.max(min, v));
+
+/* ────────────────────────────────────────────────────────────────────
+   MDF L-SHAPE — FIXED DIMENSIONS (confirmed)
+   L2 length and both widths are NOT customer-adjustable for MDF: the
+   sheet size makes anything less pointless (no material/cost saved)
+   and anything more would require a second sheet (2-piece join), which
+   isn't offered. Only L1 length stays adjustable for MDF.
+   ──────────────────────────────────────────────────────────────────── */
+const MDF_FIXED_L2 = 90;
+const MDF_FIXED_WIDTH = 50;
+
+/* Cable routing options, FOC — filtered per material */
+const CABLE_ROUTING_OPTIONS = {
+  mfc:   ["Grommet — Rectangular", "Grommet — Square"],
+  mdf:   ["Concave Slot", "Grommet — Rectangular", "Grommet — Square"],
+  solid: ["Concave Slot", "Grommet — Rectangular", "Grommet — Square", "T-Slot", "Round Hole"],
+};
+const CABLE_POSITIONS = ["Left", "Middle", "Right"];
+const CABLE_POSITION_NOTE = "Left/Right positions sit 25cm in from the table top's width edge (standard offset).";
+
+/* L2 structural orientation — which side the return arm sits on relative to L1.
+   Distinct from cable routing position above. Purely a layout choice, no price impact. */
+const L2_ORIENTATIONS = ["Left", "Right"];
+
+/* ────────────────────────────────────────────────────────────────────
+   ACCESSORIES — confirmed pricing (carried over from prior price list)
+   ──────────────────────────────────────────────────────────────────── */
+const ACCESSORY_DRAWER = 39;
+const ACCESSORY_RETRACT_SOCKET = 129;
+const ACCESSORY_CASTOR_4PCS = 39.90;   // standard rectangle desks
+/* 🔴 SUGGESTED, NOT YET CONFIRMED — $39.90/4 = $9.975 per wheel × 6 = $59.85, rounded to $59.90.
+   Replace with the actual confirmed figure once set. */
+const ACCESSORY_CASTOR_6PCS = 59.90;   // L-shape desks (3-leg base needs 6 wheels)
+
+/* ────────────────────────────────────────────────────────────────────
+   RECTANGULAR GROMMET — size + colour pricing (confirmed)
+   20cm + Black is the standard price; any other size, or any other
+   colour at any size, is the flat upgrade price.
+   ──────────────────────────────────────────────────────────────────── */
+const GROMMET_RECT_SIZES = ["13cm", "20cm", "30cm"];
+const GROMMET_RECT_COLOURS = ["Black", "Other"];
+const GROMMET_RECT_STANDARD_PRICE = 9.90;
+const GROMMET_RECT_UPGRADE_PRICE = 19.90;
+function grommetRectPrice(size, colour) {
+  return (size === "20cm" && colour === "Black") ? GROMMET_RECT_STANDARD_PRICE : GROMMET_RECT_UPGRADE_PRICE;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SHARED UI PIECES
+   ════════════════════════════════════════════════════════════════════ */
+
+function Card({children, style={}}) {
+  return <div style={{background:T.bg, border:`1px solid ${T.border}`, borderRadius:14,
+    padding:24, boxShadow:"0 1px 3px rgba(0,0,0,0.04)", ...style}}>{children}</div>;
+}
+
+function SectionLabel({children}) {
+  return <div style={{fontSize:12, fontWeight:600, color:T.brand, letterSpacing:1.4,
+    textTransform:"uppercase", marginBottom:10}}>{children}</div>;
+}
+
+function NumberField({label, value, set, min, max, suffix="cm"}) {
+  return (
+    <div>
+      <div style={{fontSize:13, color:T.textMute, marginBottom:6, fontWeight:500}}>{label}</div>
+      <div style={{display:"flex", alignItems:"center", gap:8}}>
+        <input type="number" value={value} min={min} max={max}
+          onChange={e=>set(Math.max(0, +e.target.value))}
+          style={{flex:1, border:`1.5px solid ${T.border}`, borderRadius:9, padding:"10px 12px",
+            fontSize:15, color:T.text, fontWeight:600}}/>
+        <span style={{fontSize:13, color:T.textMute}}>{suffix}</span>
+      </div>
+      <div style={{fontSize:11, color:T.textMute, marginTop:4}}>Range: {min}–{max}{suffix}</div>
+    </div>
+  );
+}
+
+/* Slider with live numeric readout — used for L-shape dimension inputs */
+function RangeSlider({label, value, set, min, max, suffix="cm"}) {
+  return (
+    <div>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8}}>
+        <span style={{fontSize:13, color:T.textMute, fontWeight:500}}>{label}</span>
+        <span style={{fontSize:16, color:T.brand, fontWeight:700}}>{value}{suffix}</span>
+      </div>
+      <input type="range" min={min} max={max} value={value}
+        onChange={e=>set(+e.target.value)}/>
+      <div style={{display:"flex", justifyContent:"space-between", marginTop:4}}>
+        <span style={{fontSize:11, color:T.textMute}}>{min}{suffix}</span>
+        <span style={{fontSize:11, color:T.textMute}}>{max}{suffix}</span>
+      </div>
+    </div>
+  );
+}
+
+/* Read-only spec display — used for MDF's locked dimensions (no slider, since not adjustable) */
+function FixedSpec({label, value, suffix="cm", note}) {
+  return (
+    <div>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8}}>
+        <span style={{fontSize:13, color:T.textMute, fontWeight:500}}>{label}</span>
+        <span style={{fontSize:16, color:T.text, fontWeight:700}}>{value}{suffix}</span>
+      </div>
+      <div style={{height:6, borderRadius:3, background:T.border}}/>
+      <div style={{fontSize:11, color:T.textMute, marginTop:4}}>{note || "Fixed size for this material"}</div>
+    </div>
+  );
+}
+
+/* Live scaled L-shape outline, redraws as L1/W1/L2/W2 change */
+/* Live scaled L-shape outline, redraws as L1/W1/L2/W2 change.
+   orientation="left" (default) draws L2 hanging down the left side;
+   orientation="right" mirrors it to hang down the right side instead. */
+function LShapeDiagram({l1, w1, l2, w2, orientation="Left"}) {
+  const DRAW = 190;             // drawable area for the shape itself
+  const PAD_L = 78, PAD_R = 80, PAD_T = 30, PAD_B = 46; // asymmetric — room for labels on every side
+  const W = PAD_L + DRAW + PAD_R;
+  const H = PAD_T + DRAW + PAD_B;
+  const maxDim = Math.max(l1, l2);
+  const scale = DRAW / maxDim;
+  const isRight = orientation === "Right";
+
+  // base points in cm-space (left orientation), mirrored around x=l1/2 when "Right"
+  const mirrorX = x => isRight ? (l1 - x) : x;
+  const cmPts = [
+    [mirrorX(0),  0],
+    [mirrorX(l1), 0],
+    [mirrorX(l1), w1],
+    [mirrorX(w2), w1],
+    [mirrorX(w2), l2],
+    [mirrorX(0),  l2],
+  ];
+  const px = cm => PAD_L + cm*scale;
+  const py = cm => PAD_T + cm*scale;
+  const pts = cmPts.map(([x,y])=>`${px(x)},${py(y)}`).join(" ");
+
+  const l1LabelX = (px(mirrorX(0))+px(mirrorX(l1)))/2;
+  const w1Side = isRight ? "end" : "start";
+  const w1LabelX = isRight ? px(mirrorX(l1))-8 : px(mirrorX(l1))+8;
+  const l2Side = isRight ? "start" : "end";
+  const l2LabelX = isRight ? px(mirrorX(0))+10 : px(mirrorX(0))-10;
+  const w2LabelX = (px(mirrorX(0))+px(mirrorX(w2)))/2;
+
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{display:"block", margin:"0 auto", maxWidth:340}}>
+      <polygon points={pts} fill={T.brandTint} stroke={T.brand} strokeWidth="2.5"/>
+      <text x={l1LabelX} y={py(0)-12} textAnchor="middle" fontSize="12" fontWeight="700"
+        fill={T.brand} fontFamily={T.font}>L1: {l1}cm</text>
+      <text x={w1LabelX} y={(py(0)+py(w1))/2} textAnchor={w1Side} fontSize="10.5"
+        fill={T.textMute} fontFamily={T.font}>W1: {w1}cm</text>
+      <text x={l2LabelX} y={(py(0)+py(l2))/2} textAnchor={l2Side} fontSize="12" fontWeight="700"
+        fill={T.brand} fontFamily={T.font}>L2: {l2}cm</text>
+      <text x={w2LabelX} y={py(l2)+22} textAnchor="middle" fontSize="10.5"
+        fill={T.textMute} fontFamily={T.font}>W2: {w2}cm</text>
+    </svg>
+  );
+}
+
+/* Toggle-style checkbox row — used for accessories */
+function CheckOption({label, price, checked, onChange}) {
+  return (
+    <div onClick={()=>onChange(!checked)} style={{
+      cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center",
+      padding:"12px 14px", borderRadius:10,
+      border:`2px solid ${checked?T.brand:T.border}`,
+      background:checked?T.brandTint:T.bg}}>
+      <div style={{display:"flex", alignItems:"center", gap:10}}>
+        <div style={{width:18, height:18, borderRadius:5, flexShrink:0,
+          border:`2px solid ${checked?T.brand:T.border}`,
+          background:checked?T.brand:"transparent",
+          display:"flex", alignItems:"center", justifyContent:"center"}}>
+          {checked && <span style={{color:"#fff", fontSize:12, fontWeight:700}}>✓</span>}
+        </div>
+        <span style={{fontSize:13.5, color:T.text, fontWeight:500}}>{label}</span>
+      </div>
+      <span style={{fontSize:13, color:T.brand, fontWeight:600}}>+{fmt(price)}</span>
+    </div>
+  );
+}
+function PillSelect({options, value, onChange}) {
+  return (
+    <div style={{display:"flex", flexWrap:"wrap", gap:8}}>
+      {options.map(opt=>{
+        const active = value===opt;
+        return (
+          <div key={opt} onClick={()=>onChange(opt)} style={{
+            cursor:"pointer", padding:"7px 14px", borderRadius:20,
+            border:`1.5px solid ${active?T.brand:T.border}`,
+            background:active?T.brand:T.bg,
+            color:active?"#fff":T.text,
+            fontSize:12.5, fontWeight:500}}>
+            {opt}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ColourSwatchGrid({colours, selected, onSelect, showRate}) {
+  return (
+    <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(92px,1fr))", gap:10}}>
+      {colours.map(c=>{
+        const isSel = selected===c.id;
+        return (
+          <div key={c.id} onClick={()=>onSelect(c.id)} style={{cursor:"pointer", textAlign:"center"}}>
+            <div style={{
+              width:"100%", aspectRatio:"1", borderRadius:10, background:c.hex,
+              border:isSel?`3px solid ${T.brand}`:`1.5px solid ${T.border}`,
+              boxShadow:isSel?"0 2px 6px rgba(107,69,48,0.3)":"none",
+              transition:"all 0.15s"
+            }}/>
+            <div style={{fontSize:11, color:isSel?T.brand:T.textMute, marginTop:5,
+              fontWeight:isSel?600:400, lineHeight:1.3}}>{c.name}</div>
+            {showRate && <div style={{fontSize:10.5, color:isSel?T.brand:T.textMute, fontWeight:isSel?600:400}}>${c.rate}/m²</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PriceRow({label, value, bold, accent, muted}) {
+  return (
+    <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline",
+      padding:"7px 0", borderBottom:`1px solid ${T.border}`}}>
+      <span style={{fontSize:13.5, color:muted?T.textMute:T.text, fontWeight:bold?600:400}}>{label}</span>
+      <span style={{fontSize:bold?16:14, color:accent?T.good:T.text, fontWeight:bold?700:500}}>{value}</span>
+    </div>
+  );
+}
+
+function StopNotice({children}) {
+  return (
+    <div style={{background:"#FBEEEC", border:`1px solid ${T.warn}`, borderRadius:10,
+      padding:"14px 16px", fontSize:13.5, color:T.warn, lineHeight:1.6}}>
+      {children}
+    </div>
+  );
+}
+
+function InfoNotice({children}) {
+  return (
+    <div style={{background:T.brandTint, border:`1px solid ${T.brand}33`, borderRadius:10,
+      padding:"12px 16px", fontSize:13, color:T.brand, lineHeight:1.6}}>
+      {children}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   RECTANGLE DESK CALCULATOR  (T-03 / T-07)
+   ════════════════════════════════════════════════════════════════════ */
+function RectCalculator() {
+  const [length, setLength] = useState(140);
+  const [depth, setDepth]   = useState(70);
+  const [motor, setMotor]   = useState("dual");
+  const [colour, setColour] = useState(MDF_COLOURS[0].id);
+  const [edge, setEdge]     = useState(MDF_EDGES[0].id);
+  const [drawer, setDrawer] = useState(false);
+  const [retractSocket, setRetractSocket] = useState(false);
+  const [castors, setCastors] = useState(false);
+
+  const isFlatTier = length>=RECT_MIN_LEN && length<=FLAT_TIER_MAX;
+  const tooShort = length < RECT_MIN_LEN;
+  const tooLong  = length > RECT_FRAMES.dual.maxLen;
+  const depthOk  = depth>=RECT_DEPTH_MIN && depth<=RECT_DEPTH_MAX;
+
+  const singleOk = length>=100 && length<=RECT_FRAMES.single.maxLen;
+  const dualOk   = length>=100 && length<=RECT_FRAMES.dual.maxLen;
+
+  useEffect(()=>{
+    if (length>=100) {
+      if (!singleOk && dualOk) setMotor("dual");
+      else if (singleOk && !dualOk) setMotor("single");
+    }
+  },[length]);
+
+  const accCost = (drawer?ACCESSORY_DRAWER:0) + (retractSocket?ACCESSORY_RETRACT_SOCKET:0) + (castors?ACCESSORY_CASTOR_4PCS:0);
+
+  const result = useMemo(()=>{
+    if (tooShort || tooLong || !depthOk) return null;
+    if (isFlatTier) return { flat:true, total:FLAT_TIER_PRICE+accCost };
+    const frame = RECT_FRAMES[motor];
+    if (!frame) return null;
+    const area = (length/100)*(depth/100);
+    const topPrice = area*TOP_RATE;
+    const assembly = length>=ASSEMBLY_THRESHOLD_CM ? ASSEMBLY_TWO_PERSON : ASSEMBLY_STANDARD;
+    const total = frame.price + topPrice + assembly + accCost;
+    return { flat:false, frame, area, topPrice, assembly, total };
+  },[length, depth, motor, isFlatTier, tooShort, tooLong, depthOk, accCost]);
+
+  return (
+    <div style={{display:"grid", gap:20}}>
+      <Card>
+        <SectionLabel>Size</SectionLabel>
+        <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16}}>
+          <NumberField label="Length" value={length} set={setLength} min={80} max={180}/>
+          <NumberField label="Depth" value={depth} set={setDepth} min={60} max={80}/>
+        </div>
+        {tooShort && <StopNotice>This length is below what we can build. The shortest we offer is {RECT_MIN_LEN}cm.</StopNotice>}
+        {tooLong && <StopNotice>This length is beyond our standard custom range. <a href={CONTACT_URL} style={{color:T.warn,fontWeight:600}}>Contact us</a> for a custom quote above {RECT_FRAMES.dual.maxLen}cm.</StopNotice>}
+        {!depthOk && !tooShort && !tooLong && <StopNotice>Depth should be between {RECT_DEPTH_MIN}–{RECT_DEPTH_MAX}cm.</StopNotice>}
+        {!tooShort && !tooLong && depthOk && (
+          <div style={{marginTop:14, fontSize:12, color:T.brand, fontWeight:600}}>
+            {isFlatTier ? "This size builds on T-03 Mini" : `This size builds on ${RECT_FRAMES[motor]?.name || ""}`}
+          </div>
+        )}
+      </Card>
+
+      {!tooShort && !tooLong && depthOk && !isFlatTier && (singleOk || dualOk) && (
+        <Card>
+          <SectionLabel>Frame</SectionLabel>
+          <div style={{display:"grid", gridTemplateColumns: singleOk&&dualOk?"1fr 1fr":"1fr", gap:12}}>
+            {singleOk && (
+              <div onClick={()=>setMotor("single")} style={{
+                cursor:"pointer", border:`2px solid ${motor==="single"?T.brand:T.border}`,
+                background:motor==="single"?T.brandTint:T.bg, borderRadius:10, padding:14}}>
+                <div style={{fontWeight:600, fontSize:14, color:T.text}}>{RECT_FRAMES.single.name}</div>
+                <div style={{fontSize:12, color:T.textMute, marginTop:2}}>Frame: {fmt(RECT_FRAMES.single.price)}</div>
+              </div>
+            )}
+            {dualOk && (
+              <div onClick={()=>setMotor("dual")} style={{
+                cursor:"pointer", border:`2px solid ${motor==="dual"?T.brand:T.border}`,
+                background:motor==="dual"?T.brandTint:T.bg, borderRadius:10, padding:14}}>
+                <div style={{fontWeight:600, fontSize:14, color:T.text}}>{RECT_FRAMES.dual.name}</div>
+                <div style={{fontSize:12, color:T.textMute, marginTop:2}}>Frame: {fmt(RECT_FRAMES.dual.price)}</div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {!tooShort && !tooLong && depthOk && (
+        <>
+          <Card>
+            <SectionLabel>MDF Colour</SectionLabel>
+            <ColourSwatchGrid colours={MDF_COLOURS} selected={colour} onSelect={setColour}/>
+          </Card>
+
+          <Card>
+            <SectionLabel>Edge Style</SectionLabel>
+            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
+              {MDF_EDGES.map(e=>(
+                <div key={e.id} onClick={()=>setEdge(e.id)} style={{
+                  cursor:"pointer", border:`2px solid ${edge===e.id?T.brand:T.border}`,
+                  background:edge===e.id?T.brandTint:T.bg, borderRadius:10, padding:14}}>
+                  <div style={{fontWeight:600, fontSize:13.5, color:T.text}}>{e.name}</div>
+                  <div style={{fontSize:11.5, color:T.textMute, marginTop:4, lineHeight:1.5}}>{e.desc}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card>
+            <SectionLabel>Accessories</SectionLabel>
+            <div style={{display:"grid", gap:10}}>
+              <CheckOption label="Slim Drawer" price={ACCESSORY_DRAWER} checked={drawer} onChange={setDrawer}/>
+              <CheckOption label="Retractable Socket" price={ACCESSORY_RETRACT_SOCKET} checked={retractSocket} onChange={setRetractSocket}/>
+              <CheckOption label="Castors (4pcs)" price={ACCESSORY_CASTOR_4PCS} checked={castors} onChange={setCastors}/>
+            </div>
+          </Card>
+
+          {result && (
+            <Card style={{background:T.bgAlt}}>
+              <SectionLabel>Your Estimate</SectionLabel>
+              {result.flat ? (
+                <>
+                  <PriceRow label="T-03 Mini, complete" value={fmt(FLAT_TIER_PRICE)} muted/>
+                  <PriceRow label="Free delivery" value="Included" muted/>
+                  <PriceRow label="Free cable tray" value="Included" muted/>
+                  {drawer && <PriceRow label="Slim Drawer" value={fmt(ACCESSORY_DRAWER)} muted/>}
+                  {retractSocket && <PriceRow label="Retractable Socket" value={fmt(ACCESSORY_RETRACT_SOCKET)} muted/>}
+                  {castors && <PriceRow label="Castors (4pcs)" value={fmt(ACCESSORY_CASTOR_4PCS)} muted/>}
+                  <div style={{display:"flex", justifyContent:"space-between", paddingTop:14}}>
+                    <span style={{fontSize:16, fontWeight:700, color:T.brand}}>Total</span>
+                    <span style={{fontSize:24, fontWeight:700, color:T.brand}}>{fmt(result.total)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <PriceRow label={`Frame (${RECT_FRAMES[motor].name})`} value={fmt(RECT_FRAMES[motor].price)} muted/>
+                  <PriceRow label={`Table top (${result.area.toFixed(2)} m² × $${TOP_RATE}/m²)`} value={fmt(result.topPrice)} muted/>
+                  <PriceRow label="Assembly" value={fmt(result.assembly)} muted/>
+                  <PriceRow label="Delivery" value="Free" muted/>
+                  <PriceRow label="Cable tray" value="Included" muted/>
+                  {drawer && <PriceRow label="Slim Drawer" value={fmt(ACCESSORY_DRAWER)} muted/>}
+                  {retractSocket && <PriceRow label="Retractable Socket" value={fmt(ACCESSORY_RETRACT_SOCKET)} muted/>}
+                  {castors && <PriceRow label="Castors (4pcs)" value={fmt(ACCESSORY_CASTOR_4PCS)} muted/>}
+                  <div style={{display:"flex", justifyContent:"space-between", paddingTop:14}}>
+                    <span style={{fontSize:16, fontWeight:700, color:T.brand}}>Total</span>
+                    <span style={{fontSize:24, fontWeight:700, color:T.brand}}>{fmt(result.total)}</span>
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   L-SHAPE DESK CALCULATOR  (3-Leg) — material sub-tabs: MFC / MDF / Solid Wood
+   ════════════════════════════════════════════════════════════════════ */
+function LShapeMaterialPanel({materialKey}) {
+  const spec = LSHAPE_MATERIALS[materialKey];
+  const isSpecies = spec.rateType === "species";
+  const isMdf = materialKey === "mdf";
+
+  // MDF locks L2 length and both widths — only L1 length is ever user-adjustable for MDF.
+  const [l1, setL1] = useState(clamp(140, LSHAPE_L1_MIN, spec.l1max));
+  const [w1, setW1] = useState(isMdf ? MDF_FIXED_WIDTH : 65);
+  const [l2, setL2] = useState(isMdf ? MDF_FIXED_L2 : clamp(120, LSHAPE_L2_MIN, spec.l2max));
+  const [w2, setW2] = useState(isMdf ? MDF_FIXED_WIDTH : 60);
+  const [orientation, setOrientation] = useState("Left");
+  const [colour, setColour] = useState(
+    materialKey==="mfc" ? MFC_COLOURS[0].id :
+    materialKey==="mdf" ? MDF_COLOURS[0].id :
+    SOLID_WOOD_SPECIES[0].id
+  );
+  const [routing, setRouting] = useState(CABLE_ROUTING_OPTIONS[materialKey][0]);
+  const [position, setPosition] = useState("Middle");
+  const [grommetSize, setGrommetSize] = useState("20cm");
+  const [grommetColour, setGrommetColour] = useState("Black");
+  const [drawer, setDrawer] = useState(false);
+  const [retractSocket, setRetractSocket] = useState(false);
+  const [castors, setCastors] = useState(false);
+
+  const isRectGrommet = routing === "Grommet — Rectangular";
+
+  const rate = isSpecies
+    ? (SOLID_WOOD_SPECIES.find(s=>s.id===colour)?.rate || 0)
+    : spec.rate;
+
+  const result = useMemo(()=>{
+    const a1 = (l1/100)*(w1/100);
+    const a2 = (l2/100)*(w2/100);
+    let area, overlap=0;
+    if (materialKey === "solid") {
+      // side-joint construction: two full boards joined, no shared-corner deduction
+      area = a1 + a2;
+    } else {
+      // cut from a single sheet: deduct the shared corner
+      overlap = (w2/100)*(w1/100);
+      area = a1 + a2 - overlap;
+    }
+    const topPrice = area*rate;
+    const assembly = materialKey === "solid"
+      ? ASSEMBLY_TWO_PERSON
+      : (l1>=ASSEMBLY_THRESHOLD_CM ? ASSEMBLY_TWO_PERSON : ASSEMBLY_STANDARD);
+
+    const grommetCost = isRectGrommet ? grommetRectPrice(grommetSize, grommetColour) : 0;
+    const accCost = (drawer?ACCESSORY_DRAWER:0) + (retractSocket?ACCESSORY_RETRACT_SOCKET:0) + (castors?ACCESSORY_CASTOR_6PCS:0);
+
+    const total = LSHAPE_FRAME_PRICE + topPrice + assembly + grommetCost + accCost;
+    return { a1, a2, overlap, area, topPrice, assembly, grommetCost, accCost, total };
+  },[materialKey, l1, w1, l2, w2, rate, isRectGrommet, grommetSize, grommetColour, drawer, retractSocket, castors]);
+
+  const colours = materialKey==="mfc" ? MFC_COLOURS : materialKey==="mdf" ? MDF_COLOURS : SOLID_WOOD_SPECIES;
+
+  return (
+    <div style={{display:"grid", gap:20}}>
+      <Card>
+        <SectionLabel>Main Side (L1)</SectionLabel>
+        <div style={{display:"grid", gap:18}}>
+          <RangeSlider label="Length" value={l1} set={setL1} min={LSHAPE_L1_MIN} max={spec.l1max}/>
+          {isMdf
+            ? <FixedSpec label="Width" value={w1} note="Fixed at 50cm for MDF — keeps the L-shape proportions clean"/>
+            : <RangeSlider label="Width" value={w1} set={setW1} min={LSHAPE_WIDTH_MIN} max={LSHAPE_WIDTH_MAX}/>}
+        </div>
+      </Card>
+
+      <Card>
+        <SectionLabel>Return Side (L2)</SectionLabel>
+        <div style={{display:"grid", gap:18, marginBottom:14}}>
+          {isMdf
+            ? <FixedSpec label="Length" value={l2} note="Fixed at 90cm for MDF — beyond this needs a second sheet, joined (not offered)"/>
+            : <RangeSlider label="Length" value={l2} set={setL2} min={LSHAPE_L2_MIN} max={spec.l2max}/>}
+          {isMdf
+            ? <FixedSpec label="Width" value={w2} note="Fixed at 50cm for MDF — keeps the L-shape proportions clean"/>
+            : <RangeSlider label="Width" value={w2} set={setW2} min={LSHAPE_WIDTH_MIN} max={LSHAPE_WIDTH_MAX}/>}
+        </div>
+        {!isMdf && (
+          <InfoNotice>
+            The maximum we can build for {spec.label} is {spec.l1max}cm (main side) and {spec.l2max}cm (return side).
+            Need something larger? <a href={CONTACT_URL} style={{color:T.brand, fontWeight:600}}>Contact our team</a> — this isn't available as a single L-shape top.
+          </InfoNotice>
+        )}
+        <div style={{marginTop:16}}>
+          <div style={{fontSize:12, color:T.textMute, marginBottom:8, fontWeight:500}}>
+            L2 Orientation — which side the return side sits on (L1 is your main side)
+          </div>
+          <PillSelect options={L2_ORIENTATIONS} value={orientation} onChange={setOrientation}/>
+        </div>
+      </Card>
+
+      <Card>
+        <SectionLabel>Shape Preview</SectionLabel>
+        <LShapeDiagram l1={l1} w1={w1} l2={l2} w2={w2} orientation={orientation}/>
+      </Card>
+
+      <Card>
+        <SectionLabel>{isSpecies ? "Wood Species" : `${spec.label} Colour`}</SectionLabel>
+        <ColourSwatchGrid colours={colours} selected={colour} onSelect={setColour} showRate={isSpecies}/>
+        {isSpecies && (
+          <div style={{marginTop:14}}>
+            <InfoNotice>
+              Solid wood is a natural material — grain pattern and exact shade vary piece to piece and can't be guaranteed to match a sample.
+            </InfoNotice>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <SectionLabel>Cable Routing</SectionLabel>
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:12, color:T.textMute, marginBottom:8, fontWeight:500}}>Style</div>
+          <PillSelect options={CABLE_ROUTING_OPTIONS[materialKey]} value={routing} onChange={setRouting}/>
+        </div>
+        <div style={{marginBottom: isRectGrommet ? 14 : 0}}>
+          <div style={{fontSize:12, color:T.textMute, marginBottom:8, fontWeight:500}}>Position</div>
+          <PillSelect options={CABLE_POSITIONS} value={position} onChange={setPosition}/>
+          {position!=="Middle" && <div style={{fontSize:11, color:T.textMute, marginTop:8}}>{CABLE_POSITION_NOTE}</div>}
+        </div>
+
+        {isRectGrommet && (
+          <div style={{marginTop:16, paddingTop:16, borderTop:`1px solid ${T.border}`}}>
+            <div style={{fontSize:12, color:T.textMute, marginBottom:8, fontWeight:500}}>Grommet Size</div>
+            <PillSelect options={GROMMET_RECT_SIZES} value={grommetSize} onChange={setGrommetSize}/>
+            <div style={{fontSize:12, color:T.textMute, marginBottom:8, marginTop:14, fontWeight:500}}>Grommet Colour</div>
+            <PillSelect options={GROMMET_RECT_COLOURS} value={grommetColour} onChange={setGrommetColour}/>
+            <div style={{fontSize:12, color:T.brand, marginTop:10, fontWeight:600}}>
+              {grommetSize==="20cm" && grommetColour==="Black" ? "Standard — " : "Upgrade — "}
+              {fmt(grommetRectPrice(grommetSize, grommetColour))}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <SectionLabel>Accessories</SectionLabel>
+        <div style={{display:"grid", gap:10}}>
+          <CheckOption label="Slim Drawer" price={ACCESSORY_DRAWER} checked={drawer} onChange={setDrawer}/>
+          <CheckOption label="Retractable Socket" price={ACCESSORY_RETRACT_SOCKET} checked={retractSocket} onChange={setRetractSocket}/>
+          <CheckOption label="Castors (6pcs)" price={ACCESSORY_CASTOR_6PCS} checked={castors} onChange={setCastors}/>
+        </div>
+      </Card>
+
+      <Card style={{background:T.bgAlt}}>
+        <SectionLabel>Your Estimate</SectionLabel>
+        <PriceRow label="Frame (3-Leg L-Shape)" value={fmt(LSHAPE_FRAME_PRICE)} muted/>
+        {materialKey==="solid" ? (
+          <>
+            <PriceRow label={`L1 area: ${result.a1.toFixed(2)} m²  +  L2 area: ${result.a2.toFixed(2)} m²`} value={`${result.area.toFixed(2)} m²`} muted/>
+            <PriceRow label={`Table top — full area, joined (${result.area.toFixed(2)} m² × $${rate}/m²)`} value={fmt(result.topPrice)} muted/>
+          </>
+        ) : (
+          <PriceRow label={`Table top — net area (${result.area.toFixed(2)} m² × $${rate}/m²)`} value={fmt(result.topPrice)} muted/>
+        )}
+        <PriceRow label="Assembly" value={fmt(result.assembly)} muted/>
+        <PriceRow label="Delivery" value="Free" muted/>
+        <PriceRow label="Cable tray" value="Included" muted/>
+        {isRectGrommet
+          ? <PriceRow label={`Grommet (${grommetSize}, ${grommetColour})`} value={fmt(result.grommetCost)} muted/>
+          : <PriceRow label={`Cable routing (${routing}, ${position})`} value="Free" muted/>}
+        {drawer && <PriceRow label="Slim Drawer" value={fmt(ACCESSORY_DRAWER)} muted/>}
+        {retractSocket && <PriceRow label="Retractable Socket" value={fmt(ACCESSORY_RETRACT_SOCKET)} muted/>}
+        {castors && <PriceRow label="Castors (6pcs)" value={fmt(ACCESSORY_CASTOR_6PCS)} muted/>}
+        <div style={{display:"flex", justifyContent:"space-between", paddingTop:14}}>
+          <span style={{fontSize:16, fontWeight:700, color:T.brand}}>Total</span>
+          <span style={{fontSize:24, fontWeight:700, color:T.brand}}>{fmt(result.total)}</span>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function LShapeCalculator() {
+  const [material, setMaterial] = useState("mfc");
+  const keys = Object.keys(LSHAPE_MATERIALS);
+
+  return (
+    <div style={{display:"grid", gap:20}}>
+      <div style={{display:"grid", gridTemplateColumns:`repeat(${keys.length},1fr)`, gap:10}}>
+        {keys.map(k=>{
+          const m = LSHAPE_MATERIALS[k];
+          const active = material===k;
+          return (
+            <div key={k} onClick={()=>setMaterial(k)} style={{
+              cursor:"pointer", textAlign:"center", padding:"14px 10px", borderRadius:10,
+              border:`2px solid ${active?T.brand:T.border}`,
+              background:active?T.brandTint:T.bg}}>
+              <div style={{fontWeight:700, fontSize:14, color:active?T.brand:T.text}}>{m.label}</div>
+              <div style={{fontSize:11, color:T.textMute, marginTop:2}}>{m.tag}</div>
+            </div>
+          );
+        })}
+      </div>
+      <LShapeMaterialPanel key={material} materialKey={material}/>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   UNIDESK  (fixed dimension, non-customisable)
+   ════════════════════════════════════════════════════════════════════ */
+function UniDeskCard() {
+  const [leg, setLeg] = useState(UNIDESK_LEG_COLOURS[0]);
+  return (
+    <Card>
+      <SectionLabel>UniDesk — Fixed Size</SectionLabel>
+      <div style={{fontSize:14, color:T.text, marginBottom:16, lineHeight:1.7}}>
+        A ready-to-go desk in one fixed size: <b>{UNIDESK_SIZE}</b>. Comes with a built-in cable management
+        channel, so no separate cable tray is needed.
+      </div>
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:13, color:T.textMute, marginBottom:8, fontWeight:500}}>Leg Colour</div>
+        <div style={{display:"flex", gap:10}}>
+          {UNIDESK_LEG_COLOURS.map(c=>(
+            <div key={c} onClick={()=>setLeg(c)} style={{
+              cursor:"pointer", padding:"9px 18px", borderRadius:8,
+              border:`2px solid ${leg===c?T.brand:T.border}`,
+              background:leg===c?T.brandTint:T.bg, fontSize:13.5, fontWeight:600,
+              color:leg===c?T.brand:T.text}}>
+              {c}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{borderTop:`1px solid ${T.border}`, paddingTop:16}}>
+        {UNIDESK_PRICE ? (
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline"}}>
+            <span style={{fontSize:16, fontWeight:700, color:T.brand}}>Price</span>
+            <span style={{fontSize:24, fontWeight:700, color:T.brand}}>{fmt(UNIDESK_PRICE)}</span>
+          </div>
+        ) : (
+          <a href={CONTACT_URL} style={{display:"inline-block", background:T.brand, color:"#fff",
+            padding:"11px 22px", borderRadius:9, fontSize:14, fontWeight:600, textDecoration:"none"}}>
+            Contact us for current price
+          </a>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   COMING SOON CARD
+   ════════════════════════════════════════════════════════════════════ */
+function ComingSoonCard({name}) {
+  return (
+    <Card style={{textAlign:"center", padding:48}}>
+      <div style={{fontSize:18, fontWeight:700, color:T.text, marginBottom:8}}>{name}</div>
+      <div style={{fontSize:14, color:T.textMute, marginBottom:20}}>
+        This desk is on its way. Check back soon, or get in touch to be notified when it launches.
+      </div>
+      <a href={CONTACT_URL} style={{display:"inline-block", background:T.brand, color:"#fff",
+        padding:"11px 22px", borderRadius:9, fontSize:14, fontWeight:600, textDecoration:"none"}}>
+        Notify Me
+      </a>
+    </Card>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   DESK TYPE SELECTOR
+   ════════════════════════════════════════════════════════════════════ */
+function TypeCard({active, onClick, title, subtitle}) {
+  return (
+    <div onClick={onClick} style={{
+      cursor:"pointer", border:`2px solid ${active?T.brand:T.border}`,
+      background:active?T.brandTint:T.bg, borderRadius:12, padding:"18px 16px",
+      transition:"all 0.15s", textAlign:"center"}}>
+      <div style={{fontSize:14.5, fontWeight:600, color:active?T.brand:T.text}}>{title}</div>
+      <div style={{fontSize:11.5, color:T.textMute, marginTop:4}}>{subtitle}</div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   MAIN APP
+   ════════════════════════════════════════════════════════════════════ */
+function App() {
+  const [type, setType] = useState("rect");
+
+  const TYPES = [
+    { id:"rect",   title:"Custom Desk",       subtitle:"Rectangular, MDF" },
+    { id:"lshape", title:"Custom L-Shape",    subtitle:"MFC, MDF or Solid Wood" },
+    { id:"uni",    title:"UniDesk",           subtitle:"Fixed size" },
+    { id:"slant",  title:SLANTED_DESK_NAME,   subtitle:"Coming soon" },
+    { id:"game",   title:GAMING_DESK_NAME,    subtitle:"Coming soon" },
+  ];
+
+  return (
+    <div style={{maxWidth:760, margin:"0 auto", padding:"36px 20px 60px"}}>
+
+      {/* Header */}
+      <div style={{textAlign:"center", marginBottom:36}}>
+        <div style={{fontSize:12, fontWeight:600, color:T.brand, letterSpacing:2.5,
+          textTransform:"uppercase", marginBottom:8}}>Build Your Desks</div>
+        <div style={{fontSize:30, fontWeight:700, color:T.text, marginBottom:8}}>Price Estimator</div>
+        <div style={{fontSize:14.5, color:T.textMute, maxWidth:480, margin:"0 auto", lineHeight:1.7}}>
+          Pick a desk, dial in your size and finish, and see an instant estimate.
+        </div>
+      </div>
+
+      {/* Desk type selector */}
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",
+        gap:10, marginBottom:28}}>
+        {TYPES.map(t=>(
+          <TypeCard key={t.id} active={type===t.id} onClick={()=>setType(t.id)}
+            title={t.title} subtitle={t.subtitle}/>
+        ))}
+      </div>
+
+      {/* Active calculator */}
+      {type==="rect"   && <RectCalculator/>}
+      {type==="lshape" && <LShapeCalculator/>}
+      {type==="uni"    && <UniDeskCard/>}
+      {type==="slant"  && <ComingSoonCard name={SLANTED_DESK_NAME}/>}
+      {type==="game"   && <ComingSoonCard name={GAMING_DESK_NAME}/>}
+
+      {/* Footer */}
+      <div style={{marginTop:40, textAlign:"center"}}>
+        <div style={{fontSize:12, color:T.textMute, lineHeight:1.8, marginBottom:16}}>
+          Prices shown are estimates and may be subject to final confirmation by our team.
+        </div>
+        <a href={CONTACT_URL} style={{fontSize:13, color:T.brand, fontWeight:600, textDecoration:"none"}}>
+          Have a question? Get in touch →
+        </a>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
